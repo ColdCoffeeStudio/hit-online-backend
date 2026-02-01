@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebSocket Test Client</title>
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+<h1>Hit! Game - WebSocket Test</h1>
+
+<div id="connection-status">Disconnected</div>
+
+<h2>1. Register Player</h2>
+<input type="text" id="username" placeholder="Enter username">
+<button onclick="registerPlayer()">Register</button>
+
+<h2>2. Create Lobby</h2>
+<button onclick="createLobby()">Create New Lobby</button>
+
+<h2>3. Join Lobby</h2>
+<input type="text" id="lobbyId" placeholder="Enter lobby ID">
+<button onclick="joinLobby()">Join Lobby</button>
+
+<h2>Events Log</h2>
+<div id="events" style="border: 1px solid black; padding: 10px; height: 300px; overflow-y: scroll;"></div>
+
+<script>
+  // Step 1: Connect to the WebSocket server
+  const socket = io('http://localhost:3000');
+
+  // Step 2: Listen for connection events
+  socket.on('connect', () => {
+    document.getElementById('connection-status').textContent = 'Connected! Socket ID: ' + socket.id;
+    logEvent('Connected to server');
+  });
+
+  socket.on('disconnect', () => {
+    document.getElementById('connection-status').textContent = 'Disconnected';
+    logEvent('Disconnected from server');
+  });
+
+  // Step 3: Listen for responses from the server
+  socket.on('register_success', (data) => {
+    logEvent('✅ Registration successful!');
+  });
+
+  socket.on('register_error', (data) => {
+    logEvent('❌ Registration error: ' + data.error);
+  });
+
+  socket.on('player_joined', (data) => {
+    logEvent('👤 [' + data.lobbyId + '] Player joined: ' + data.playerName);
+  });
+
+  socket.on('player_left', (data) => {
+    logEvent('👋 Player left: ' + data.playerName);
+  });
+
+  socket.on('lobby_creation_error', (data) => {
+    logEvent('❌ Lobby creation error: ' + data.error);
+  });
+
+  socket.on('joining_error', (data) => {
+    logEvent('❌ Lobby joining error: ' + data.error);
+  });
+
+  // Step 4: Functions to send events to the server
+  function registerPlayer() {
+    const username = document.getElementById('username').value;
+    if (username) {
+      socket.emit('register_player', { username: username });
+      logEvent('Attempting to register as: ' + username);
+    } else {
+      alert('Please enter a username');
+    }
+  }
+
+  function createLobby() {
+    socket.emit('create_lobby');
+    logEvent('Attempting to create lobby...');
+  }
+
+  function joinLobby() {
+    const lobbyId = document.getElementById('lobbyId').value;
+    if (lobbyId) {
+      socket.emit('join_lobby', { lobbyId: lobbyId });
+      logEvent('Attempting to join lobby: ' + lobbyId);
+    } else {
+      alert('Please enter a lobby ID');
+    }
+  }
+
+  // Helper function to display events
+  function logEvent(message) {
+    const eventsDiv = document.getElementById('events');
+    const timestamp = new Date().toLocaleTimeString();
+    eventsDiv.innerHTML += `<div>[${timestamp}] ${message}</div>`;
+    eventsDiv.scrollTop = eventsDiv.scrollHeight;
+  }
+</script>
+</body>
+</html>
