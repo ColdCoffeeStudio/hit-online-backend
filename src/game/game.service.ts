@@ -37,12 +37,12 @@ export class GameService {
     lobbyName: string,
   ): {
     succeeded: boolean;
-    lobbyId: string;
+    lobbyName: string;
     error: CustomError;
   } {
     let result: {
       succeeded: boolean;
-      lobbyId: string;
+      lobbyName: string;
       error: CustomError;
     };
 
@@ -51,73 +51,101 @@ export class GameService {
       const playerName: string | undefined =
         this.connectedPlayers.get(socketId);
 
-      if (!playerName) {
+      if (this.lobbies.get(lobbyName)){
         result = {
           succeeded: false,
-          lobbyId: '',
-          error: this.lobbyErrors.playerNotFound(),
+          lobbyName: '',
+          error: this.lobbyErrors.lobbyNameAlreadyTaken()
         };
       } else {
-        const player: Player = { id: socketId, name: playerName };
-        const lobby: Lobby = {
-          id: guid,
-          name: lobbyName,
-          players: [player],
-          creatorId: socketId,
-          gameState: GameState.LOBBY,
-          game: Game.empty(),
-        };
-        this.lobbies.set(lobbyName, lobby);
-        result = {
-          succeeded: true,
-          lobbyId: lobbyName,
-          error: CustomError.empty(),
-        };
+        if (!playerName) {
+          result = {
+            succeeded: false,
+            lobbyName: '',
+            error: this.lobbyErrors.playerNotFound(),
+          };
+        } else {
+          const player: Player = { id: socketId, name: playerName };
+          const lobby: Lobby = {
+            id: guid,
+            name: lobbyName,
+            players: [player],
+            creatorId: socketId,
+            gameState: GameState.LOBBY,
+            game: Game.empty(),
+          };
+
+          this.lobbies.set(lobbyName, lobby);
+          result = {
+            succeeded: true,
+            lobbyName: lobbyName,
+            error: CustomError.empty(),
+          };
+        }
       }
     } else {
       result = {
         succeeded: false,
-        lobbyId: '',
+        lobbyName: '',
         error: this.lobbyErrors.emptyLobbyName(),
       };
     }
+
+    console.debug(result);
     return result;
   }
 
   joinLobby(socketId: string, lobbyName: string): Result {
     const lobby: Lobby | undefined = this.lobbies.get(lobbyName);
     let result: Result;
+    const presentInLobby: { present: boolean; lobbyName: string } =
+      this.inLobby(socketId);
 
-    console.debug(lobbyName);
-
-    if (!lobby) {
-      result = new Result(false, this.lobbyErrors.lobbyNotFound());
-    } else if (lobby.players.length >= 5) {
-      result = new Result(false, this.lobbyErrors.lobbyAlreadyFull());
-    } else {
-      if (lobby.gameState === GameState.LOBBY) {
-        const playerName: string | undefined =
-          this.connectedPlayers.get(socketId);
-
-        if (!playerName) {
-          result = new Result(false, this.lobbyErrors.playerNotFound());
-        } else {
-          const player: Player = { id: socketId, name: playerName };
-
-          this.leaveLobby(socketId);
-          lobby.players = [...lobby.players, player];
-          this.lobbies.set(lobby.id, lobby);
-          result = new Result(true, CustomError.empty());
-        }
+    if (!presentInLobby.present) {
+      if (!lobby) {
+        result = new Result(false, this.lobbyErrors.lobbyNotFound());
+      } else if (lobby.players.length >= 5) {
+        result = new Result(false, this.lobbyErrors.lobbyAlreadyFull());
       } else {
-        result = new Result(false, this.lobbyErrors.gameAlreadyStarted());
+        if (lobby.gameState === GameState.LOBBY) {
+          const playerName: string | undefined =
+            this.connectedPlayers.get(socketId);
+
+          if (!playerName) {
+            result = new Result(false, this.lobbyErrors.playerNotFound());
+          } else {
+            const player: Player = { id: socketId, name: playerName };
+
+            this.leaveLobby(socketId);
+            lobby.players = [...lobby.players, player];
+            this.lobbies.set(lobby.name, lobby);
+            result = new Result(true, CustomError.empty());
+          }
+        } else {
+          result = new Result(false, this.lobbyErrors.gameAlreadyStarted());
+        }
       }
+    } else {
+      result = new Result(
+        false,
+        this.lobbyErrors.playerAlreadyInLobby(presentInLobby.lobbyName),
+      );
     }
+
     return result;
   }
 
-  availableLobbies(): Map<string, Lobby> {
-    return this.lobbies;
+  availableLobbies(): Lobby[] {
+    const lobbies: Map<string, Lobby> = this.lobbies;
+    const availableLobbies: Lobby[] = [];
+
+    for (const lobby of lobbies.values()) {
+      if (lobby.gameState === GameState.LOBBY) {
+        availableLobbies.push(lobby);
+      }
+    }
+
+    return availableLobbies;
   }
 
   removePlayer(socketId: string): Result {
@@ -149,7 +177,7 @@ export class GameService {
   }
 
   leaveLobby(socketId: string): void {
-    for (const [lobbyId, lobby] of this.lobbies.entries()) {
+    for (const [lobbyName, lobby] of this.lobbies.entries()) {
       const playersBefore = lobby.players.length;
       lobby.players = lobby.players.filter(
         (p: Player): boolean => p.id !== socketId,
@@ -157,7 +185,7 @@ export class GameService {
 
       if (lobby.players.length !== playersBefore) {
         if (lobby.players.length === 0) {
-          this.lobbies.delete(lobbyId);
+          this.lobbies.delete(lobbyName);
           continue;
         }
 
@@ -165,8 +193,40 @@ export class GameService {
           lobby.creatorId = lobby.players[0].id;
         }
 
-        this.lobbies.set(lobbyId, lobby);
+        this.lobbies.set(lobbyName, lobby);
       }
     }
+  }
+
+  inLobby(socketId: string): { present: boolean; lobbyName: string } {
+    let presentInLobby = false;
+    let lobbyName: string = '';
+
+    for (const lobby of this.lobbies.values()) {
+      const filteredPlayers = lobby.players.filter(
+        (p: Player): boolean => p.id === socketId,
+      );
+
+      console.debug(filteredPlayers);
+
+      if (filteredPlayers.length > 0) {
+        presentInLobby = true;
+        lobbyName = lobby.name;
+        break;
+      }
+    }
+
+    return { present: presentInLobby, lobbyName: lobbyName };
+  }
+
+  playersInLobby(lobbyId: string) {
+    console.debug(this.lobbies);
+
+    const lobby = this.lobbies.get(lobbyId);
+    let players: Player[] = [];
+    if (lobby) {
+      players = lobby.players;
+    }
+    return players;
   }
 }

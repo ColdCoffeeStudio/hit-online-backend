@@ -12,6 +12,7 @@ import { GameService } from './game.service';
 import { Result } from '../shared/result';
 import { CustomError } from '../shared/customError';
 import { Lobby } from '../shared/lobby';
+import { Player } from '../shared/player';
 
 @WebSocketGateway({
   cors: {
@@ -30,51 +31,31 @@ class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   handleDisconnect(client: Socket) {
     console.log(`Client disconnected: ${client.id}`);
-
-    const usernameResult = this.gameService.playerName(client.id);
-
-    if (usernameResult.error.message === '') {
-      const username = usernameResult.name;
-
-      const lobbies = this.gameService.availableLobbies();
-      for (const [lobbyId, lobby] of lobbies.entries()) {
-        const playerInLobby = lobby.players.find((p) => p.id === client.id);
-
-        if (playerInLobby) {
-          this.gameService.removePlayer(client.id);
-
-          this.server.to(lobbyId).emit('player_left', {
-            playerName: username,
-            message: `${username} has left the lobby`,
-          });
-
-          break;
-        }
-      }
-    }
+    this.gameService.removePlayer(client.id);
   }
 
   @SubscribeMessage('create_lobby')
-  handleLobbyCreation(
+  async handleLobbyCreation(
     @ConnectedSocket() client: Socket,
     @MessageBody() lobbyName: string,
   ) {
     const result = this.gameService.createLobby(client.id, lobbyName);
-
     if (result.succeeded) {
       const usernameResult: {
         succeeded: boolean;
         name: string;
         error: CustomError;
       } = this.gameService.playerName(client.id);
-
       if (usernameResult.succeeded) {
-        client.join(result.lobbyId);
-        this.server.to(result.lobbyId).emit('player_joined', {
+        await client.join(result.lobbyName);
+        client.emit('lobby_created');
+
+        this.server.to(result.lobbyName).emit('player_joined', {
           playerName: usernameResult.name,
-          lobbyId: result.lobbyId,
+          lobbyName: result.lobbyName,
         });
-        this.server.emit('lobbies');
+
+        this.server.to(result.lobbyName).emit('request_lobbies');
       } else {
         client.emit('lobby_creation_error', {
           error: usernameResult.error.message,
@@ -100,7 +81,7 @@ class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('join_lobby')
-  handleJoinLobby(
+  async handleJoinLobby(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { lobbyName: string },
   ) {
@@ -110,11 +91,12 @@ class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     );
 
     if (result.succeeded) {
-      this.server.emit('lobbies');
+      this.server.emit('request_lobbies');
 
-      client.join(data.lobbyName);
+      await client.join(data.lobbyName);
       const usernameResult: { name: string; error: CustomError } =
         this.gameService.playerName(client.id);
+
       this.server.to(data.lobbyName).emit('player_joined', {
         playerName: usernameResult.name,
         lobbyName: data.lobbyName,
@@ -124,23 +106,37 @@ class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
-  @SubscribeMessage('lobbies')
+  @SubscribeMessage('request_lobbies')
   handleLobbies(@ConnectedSocket() client: Socket) {
-    const lobbies: Map<string, Lobby> =
-      this.gameService.availableLobbies() ?? new Map<string, Lobby>();
+    const lobbies: Lobby[] = this.gameService.availableLobbies() ?? [];
 
     const lobbiesResult: { name: string; playersAmount: number }[] = [];
 
-    for (const lobby of lobbies.values()) {
-      console.debug(lobby.name);
+    for (const lobby of lobbies) {
       lobbiesResult.push({
         name: lobby.name,
         playersAmount: lobby.players.length,
       });
     }
 
-    console.debug('lobbiesResult', lobbiesResult);
-    client.emit('lobbies_values', { lobbies: lobbiesResult });
+    client.emit('lobbies', { lobbies: lobbiesResult });
+  }
+
+  @SubscribeMessage('request_players_in_lobby')
+  handlePlayersInLobby(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { lobbyName: string },
+  ) {
+    console.debug(`players_in_lobby: '${data.lobbyName}'`);
+    const players: Player[] = this.gameService.playersInLobby(data.lobbyName);
+
+    if (players.length > 0) {
+      this.server
+        .to(data.lobbyName)
+        .emit('players_in_lobby', { players: players });
+    } else {
+      client.emit('players_in_lobby_error');
+    }
   }
 }
 
